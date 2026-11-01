@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>LinguaNote</title>
+  <meta name="theme-color" content="#080810" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LinguaNote" />
+  <style>
+    * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+    body { font-family:Georgia,'Times New Roman',serif; background:#080810; color:#e8dcc8; overscroll-behavior:none; }
+    input,textarea,button,select { font-family:inherit; }
+    ::-webkit-scrollbar { width:3px; }
+    ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
+    .youglish-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:200; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    .fade-in { animation:fadeIn 0.3s ease; }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  const app = initializeApp({
+    apiKey:"AIzaSyCo00XqYs23jJTgNYar00dApcVuFmgP4ZU",
+    authDomain:"linguanote-48e9a.firebaseapp.com",
+    projectId:"linguanote-48e9a",
+    storageBucket:"linguanote-48e9a.firebasestorage.app",
+    messagingSenderId:"222369999798",
+    appId:"1:222369999798:web:395224a0fb9ac3927fef17"
+  });
+  const db = getFirestore(app);
+  window._db=db; window._fbReady=true;
+  window._setDoc=setDoc; window._getDoc=getDoc; window._doc=doc;
+  window.dispatchEvent(new Event("fbready"));
+</script>
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Firebase ──
+const fbSave = async (k,d) => { try { if(!window._db)return; await window._setDoc(window._doc(window._db,"linguanote",k),{data:JSON.stringify(d)}); } catch(e){} };
+const fbLoad = async (k) => { try { if(!window._db)return null; const s=await window._getDoc(window._doc(window._db,"linguanote",k)); if(s.exists())return JSON.parse(s.data().data); } catch(e){} return null; };
+const LS = (k,d) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):d; } catch{return d;} };
+const SS = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch{} };
+const newId = () => Math.random().toString(36).slice(2,9);
+
+// ── Anthropic API ──
+const CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+const askClaude = async (apiKey, system, user, history=[]) => {
+  const msgs = [...history.map(m=>({role:m.role,content:m.content})), {role:"user",content:user}];
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-api-key":apiKey,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:CLAUDE_MODEL, max_tokens:1024, system, messages:msgs})
+  });
+  const d = await r.json();
+  if(d.error){
+    const m = d.error.message||"";
+    if(/credit balance/i.test(m)) throw new Error("Anthropic 크레딧이 부족해요. console.anthropic.com > Billing에서 크레딧을 충전해주세요.");
+    if(/invalid x-api-key|authentication/i.test(m)) throw new Error("API 키가 올바르지 않아요. 언어 변경 후 키를 다시 입력해주세요.");
+    throw new Error(m);
+  }
+  return d.content?.map(b=>b.text||"").join("")||"";
+};
+
+const LANGS = {
+  en: {
+    code:"en", name:"English", native:"영어", flag:"🇺🇸", script:"Hello, World!", youglishLang:"english",
+    th:{ bg:"linear-gradient(135deg,#0d1f0f,#1a2e1c,#0f1a10)", ac:"#c8a84b", acBg:"rgba(200,168,75,0.15)", acBd:"rgba(200,168,75,0.4)", acDim:"rgba(200,168,75,0.08)", mu:"#8a9e8a", muD:"#4a5e4a", tx:"#e8dcc8", bd:"rgba(180,160,100,0.2)", bdD:"rgba(180,160,100,0.15)", card:"rgba(255,255,255,0.03)", inp:"rgba(255,255,255,0.05)", ok:{c:"#8ae88a",b:"rgba(80,180,80,0.4)",bg:"rgba(80,180,80,0.1)"}, no:{c:"#e88a8a",b:"rgba(200,80,80,0.4)",bg:"rgba(200,80,80,0.1)"} },
+    sample:[
+      {id:"s1",word:"serendipity",meaning:"뜻밖의 행운, 우연한 발견",example:"Finding that café was pure serendipity.",phonetic:"/ˌsɛrənˈdɪpɪti/",korean_pronunciation:"세런디피티",date:"2026-03-08",reviewCount:0,mastered:false},
+      {id:"s2",word:"ephemeral",meaning:"순간적인, 덧없는",example:"Social media fame is often ephemeral.",phonetic:"/ɪˈfɛmərəl/",korean_pronunciation:"이페머럴",date:"2026-03-09",reviewCount:0,mastered:false},
+      {id:"s3",word:"resilience",meaning:"회복력, 탄력성",example:"Her resilience inspired everyone around her.",phonetic:"/rɪˈzɪliəns/",korean_pronunciation:"리질리언스",date:"2026-03-10",reviewCount:0,mastered:false},
+    ],
+  },
+  zh: {
+    code:"zh", name:"中文", native:"중국어", flag:"🇨🇳", script:"你好，世界！", youglishLang:"chinese",
+    th:{ bg:"linear-gradient(135deg,#1f0d0d,#2e1a1a,#1a0f0f)", ac:"#e05c5c", acBg:"rgba(220,90,90,0.15)", acBd:"rgba(220,90,90,0.4)", acDim:"rgba(220,90,90,0.08)", mu:"#9e8a8a", muD:"#5e4a4a", tx:"#e8d8d8", bd:"rgba(180,120,120,0.2)", bdD:"rgba(180,120,120,0.15)", card:"rgba(255,255,255,0.03)", inp:"rgba(255,255,255,0.05)", ok:{c:"#8ae88a",b:"rgba(80,180,80,0.4)",bg:"rgba(80,180,80,0.1)"}, no:{c:"#e88a8a",b:"rgba(200,80,80,0.4)",bg:"rgba(200,80,80,0.1)"} },
+    sample:[
+      {id:"z1",word:"缘分",meaning:"인연, 운명적인 만남",example:"我们能相识是一种缘分。",phonetic:"yuánfèn",date:"2026-03-08",reviewCount:0,mastered:false},
+      {id:"z2",word:"加油",meaning:"힘내!, 파이팅!",example:"你可以的，加油！",phonetic:"jiāyóu",date:"2026-03-09",reviewCount:0,mastered:false},
+      {id:"z3",word:"随缘",meaning:"인연에 맡기다",example:"凡事随缘，不要强求。",phonetic:"suíyuán",date:"2026-03-10",reviewCount:0,mastered:false},
+    ],
+  },
+};
+
+const TABS = ["📝 단어장","🔁 복습","💬 다이얼로그","📓 메모"];
+
+// ── Spinner ──
+const Spinner = ({color="#c8a84b"}) => <div style={{width:18,height:18,border:`2px solid rgba(255,255,255,0.1)`,borderTop:`2px solid ${color}`,borderRadius:"50%",animation:"spin 0.8s linear infinite",display:"inline-block"}} />;
+
+// ── YouGlish Modal ──
+function YouGlishModal({word,lang,onClose}) {
+  return (
+    <div className="youglish-overlay" onClick={onClose}>
+      <div style={{width:"100%",maxWidth:800,background:"#0a0a12",borderRadius:16,overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",borderBottom:"1px solid rgba(255,255,255,0.08)"}}>
+          <span style={{fontWeight:700}}>"{word}" — 실제 사용 영상</span>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.08)",border:"none",color:"#ccc",borderRadius:8,padding:"6px 12px",cursor:"pointer"}}>✕</button>
+        </div>
+        <iframe src={`https://youglish.com/pronounce/${encodeURIComponent(word)}/${lang}`} style={{width:"100%",height:400,border:"none",display:"block"}} allow="autoplay" />
+      </div>
+    </div>
+  );
+}
+
+// ── Language Select ──
+function LangSelect({onSelect}) {
+  const [hov,setHov]=useState(null);
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#080810,#0f0f18,#0a0a12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{textAlign:"center",marginBottom:52}}>
+        <div style={{fontSize:11,color:"#35354a",letterSpacing:6,textTransform:"uppercase",fontFamily:"monospace",marginBottom:12}}>Welcome to</div>
+        <h1 style={{fontSize:42,fontWeight:700,color:"#e0d8cc",letterSpacing:"-1.5px",marginBottom:8}}>LinguaNote</h1>
+        <p style={{color:"#38384e",fontSize:11,letterSpacing:4,textTransform:"uppercase",fontFamily:"monospace"}}>Language Learning Studio</p>
+      </div>
+      <p style={{color:"#38384e",fontSize:11,marginBottom:28,letterSpacing:3,textTransform:"uppercase"}}>오늘은 어떤 언어를 공부할까요?</p>
+      <div style={{display:"flex",gap:20,flexWrap:"wrap",justifyContent:"center",marginBottom:48}}>
+        {Object.values(LANGS).map(lg=>{
+          const isEn=lg.code==="en",isH=hov===lg.code;
+          const ac=isEn?"#c8a84b":"#e05c5c";
+          return (
+            <button key={lg.code} onMouseEnter={()=>setHov(lg.code)} onMouseLeave={()=>setHov(null)} onClick={()=>onSelect(lg.code)}
+              style={{width:210,padding:"32px 24px",background:isH?(isEn?"rgba(200,168,75,0.06)":"rgba(220,90,90,0.06)"):"rgba(255,255,255,0.018)",border:`1px solid ${isH?ac:(isEn?"rgba(200,168,75,0.15)":"rgba(220,90,90,0.15)")}`,borderRadius:20,cursor:"pointer",textAlign:"center",transition:"all 0.3s",transform:isH?"translateY(-4px)":"none",fontFamily:"inherit"}}>
+              <div style={{fontSize:48,marginBottom:14}}>{lg.flag}</div>
+              <div style={{fontSize:24,fontWeight:700,color:isH?ac:"#bcb4aa",marginBottom:4}}>{lg.name}</div>
+              <div style={{fontSize:12,color:"#48485e",marginBottom:18}}>{lg.native}</div>
+              <div style={{fontSize:15,color:ac,opacity:isH?0.9:0.25,fontStyle:"italic",marginBottom:18}}>{lg.script}</div>
+              <div style={{padding:"7px 0",borderTop:`1px solid ${isH?ac+"44":"rgba(255,255,255,0.04)"}`,fontSize:10,color:isH?ac:"#2a2a38",letterSpacing:2,textTransform:"uppercase"}}>{isH?"시작하기 →":"학습 시작"}</div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── API Key Setup ──
+function ApiSetup({onSave}) {
+  const [key,setKey]=useState("");
+  const [testing,setTesting]=useState(false);
+  const [err,setErr]=useState("");
+  const test = async () => {
+    if(!key.trim().startsWith("sk-ant-")){setErr("키는 'sk-ant-'로 시작해야 해요");return;}
+    setTesting(true);setErr("");
+    try {
+      await askClaude(key.trim(),"Reply with just: ok","ping");
+      SS("ln_apikey",key.trim()); onSave(key.trim());
+    } catch(e){setErr("키가 올바르지 않아요: "+e.message);}
+    setTesting(false);
+  };
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#080810,#0f0f18)",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{width:"100%",maxWidth:420,background:"rgba(255,255,255,0.03)",borderRadius:20,padding:32,border:"1px solid rgba(255,255,255,0.08)"}}>
+        <h2 style={{fontSize:22,fontWeight:700,marginBottom:8,color:"#e8dcc8"}}>Anthropic API 키 입력</h2>
+        <p style={{fontSize:13,color:"#666",marginBottom:20,lineHeight:1.7}}>AI 기능을 사용하려면 API 키가 필요해요.<br/><a href="https://console.anthropic.com" target="_blank" style={{color:"#c8a84b",textDecoration:"none"}}>console.anthropic.com</a>에서 발급받을 수 있어요.</p>
+        <input type="password" value={key} onChange={e=>setKey(e.target.value)} onKeyDown={e=>e.key==="Enter"&&test()} placeholder="sk-ant-api03-..." style={{width:"100%",padding:"12px 16px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,color:"#e8dcc8",fontSize:14,outline:"none",marginBottom:12}} />
+        {err && <div style={{padding:"10px 14px",background:"rgba(200,80,80,0.1)",border:"1px solid rgba(200,80,80,0.3)",borderRadius:8,color:"#e88a8a",fontSize:13,marginBottom:12}}>⚠️ {err}</div>}
+        <button onClick={test} disabled={testing} style={{width:"100%",padding:"12px",borderRadius:10,background:"rgba(200,168,75,0.2)",border:"1px solid rgba(200,168,75,0.4)",color:"#c8a84b",cursor:"pointer",fontSize:15,fontWeight:600}}>
+          {testing?<Spinner />:"시작하기 →"}
+        </button>
+        <p style={{textAlign:"center",fontSize:11,color:"#333",marginTop:12}}>키는 이 기기 브라우저에만 저장되며 외부로 전송되지 않아요.</p>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──
+function LangApp({lc,apiKey,onBack,onResetKey}) {
+  const lg=LANGS[lc]; const t=lg.th;
+
+  const [vocab,setVocabRaw]=useState(()=>LS(`ln_vocab_${lc}`,lg.sample));
+  const setVocab=fn=>setVocabRaw(prev=>{const next=typeof fn==="function"?fn(prev):fn;SS(`ln_vocab_${lc}`,next);fbSave(`vocab_${lc}`,next);return next;});
+
+  const [notes,setNotesRaw]=useState(()=>LS(`ln_notes_${lc}`,[{text:"오늘부터 LinguaNote로 영어 공부 시작!",date:"2026-03-08"}]));
+  const setNotes=fn=>setNotesRaw(prev=>{const next=typeof fn==="function"?fn(prev):fn;SS(`ln_notes_${lc}`,next);fbSave(`notes_${lc}`,next);return next;});
+
+  useEffect(()=>{
+    const load=async()=>{
+      const v=await fbLoad(`vocab_${lc}`);if(v){setVocabRaw(v);SS(`ln_vocab_${lc}`,v);}
+      const n=await fbLoad(`notes_${lc}`);if(n){setNotesRaw(n);SS(`ln_notes_${lc}`,n);}
+    };
+    if(window._fbReady)load();else window.addEventListener("fbready",load,{once:true});
+  },[lc]);
+
+  const [tab,setTab]=useState(0);
+  const S=(ex={})=>({width:"100%",padding:"10px 14px",background:t.inp,border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,color:t.tx,fontFamily:"inherit",fontSize:14,outline:"none",boxSizing:"border-box",...ex});
+
+  // 단어장 상태
+  const [nWord,setNWord]=useState(""); const [nMean,setNMean]=useState("");
+  const [nEx,setNEx]=useState(""); const [nPhon,setNPhon]=useState("");
+  const [nKorPron,setNKorPron]=useState(""); const [editIdx,setEditIdx]=useState(null);
+  const [search,setSearch]=useState(""); const [filterMode,setFilterMode]=useState("all");
+  const [youglishWord,setYouglishWord]=useState(null);
+  const [autoFilling,setAutoFilling]=useState(false);
+
+  // 복습 상태
+  const [ci,setCi]=useState(0); const [flipped,setFlipped]=useState(false);
+  const [rMode,setRMode]=useState("word"); const [score,setScore]=useState({ok:0,no:0});
+  const [shuffled,setShuffled]=useState(null); const [smartMode,setSmartMode]=useState(true);
+  const [writingMode,setWritingMode]=useState(false); const [writingText,setWritingText]=useState("");
+  const [writingFeedback,setWritingFeedback]=useState(""); const [feedbackLoading,setFeedbackLoading]=useState(false);
+
+  // 다이얼로그 상태
+  const [dialogue,setDialogue]=useState(null); const [dialogueLoading,setDialogueLoading]=useState(false);
+
+  // 메모 상태
+  const [memo,setMemo]=useState(""); const [editNoteIdx,setEditNoteIdx]=useState(null);
+
+  // ── 가져오기 상태 ──
+  const [showImport,setShowImport]=useState(false);
+  const [importText,setImportText]=useState("");
+  const [importLoading,setImportLoading]=useState(false);
+  const [importResult,setImportResult]=useState(null);
+
+  const runImport = async () => {
+    if(!importText.trim()||importLoading) return;
+    setImportLoading(true); setImportResult(null);
+    try {
+      const lang = lc==="en"?"English":"Chinese";
+      const sys = `You are a vocabulary parser. The user will paste notes from Evernote or any app containing ${lang} words/phrases they've been studying.
+Extract ALL vocabulary items and return ONLY a JSON array, no other text:
+[{"word":"...","meaning":"Korean meaning","example":"example if found or empty string"},...]
+Rules:
+- Extract every ${lang} word or phrase you find
+- If meaning is given, use it. If not, infer from context or leave as empty string
+- Clean up the words (remove numbering, bullets, extra spaces)
+- Skip pure Korean text, keep ${lang} items only
+- Return valid JSON array only`;
+      const raw = await askClaude(apiKey, sys, importText.trim());
+      const clean = raw.replace(/```json|```/g,"").trim();
+      const parsed = JSON.parse(clean);
+      setImportResult(parsed);
+    } catch(e){ setImportResult({error:"파싱 실패: "+e.message}); }
+    setImportLoading(false);
+  };
+
+  const confirmImport = () => {
+    if(!importResult||importResult.error) return;
+    const newWords = importResult.map(item=>({
+      id: Date.now()+Math.random(),
+      word: item.word||"",
+      meaning: item.meaning||"",
+      example: item.example||"",
+      phonetic:"", korean_pronunciation:"",
+      mastered:false, reviewCount:0,
+      date: new Date().toLocaleDateString("ko-KR")
+    })).filter(w=>w.word);
+    setVocab(prev=>[...newWords,...prev]);
+    setShowImport(false); setImportText(""); setImportResult(null);
+    alert(`✅ ${newWords.length}개 단어가 추가됐어요!`);
+  };
+
+  // ── 일괄 자동완성 상태 ──
+  const [bulkFilling,setBulkFilling]=useState(false);
+  const [bulkProgress,setBulkProgress]=useState({current:0,total:0});
+
+  const bulkAutoFill = async () => {
+    const missing = vocab.filter(v=>!v.phonetic && v.word);
+    if(missing.length===0){ alert("발음기호가 없는 단어가 없어요!"); return; }
+    if(!confirm(`발음기호 없는 단어 ${missing.length}개를 자동완성할까요?\n(시간이 걸릴 수 있어요)`)) return;
+    setBulkFilling(true);
+    setBulkProgress({current:0, total:missing.length});
+    const sys = lc==="en"
+      ? `You are a pronunciation assistant. Given an English word, respond ONLY with JSON: {"phonetic":"IPA notation","korean_pronunciation":"Korean phonetic reading","meaning":"Korean meaning if empty","example":"simple English example sentence"}`
+      : `You are a Chinese language assistant. Given a Chinese word, respond ONLY with JSON: {"phonetic":"pinyin with tones","meaning":"Korean meaning if empty","example":"simple Chinese example sentence"}`;
+    for(let i=0;i<missing.length;i++){
+      const v = missing[i];
+      setBulkProgress({current:i+1, total:missing.length});
+      try {
+        const raw = await askClaude(apiKey, sys, v.word);
+        const clean = raw.replace(/```json|```/g,"").trim();
+        const data = JSON.parse(clean);
+        setVocab(prev=>prev.map(w=>w.id===v.id?{
+          ...w,
+          phonetic: data.phonetic||w.phonetic,
+          korean_pronunciation: data.korean_pronunciation||w.korean_pronunciation,
+          meaning: w.meaning||data.meaning||w.meaning,
+          example: w.example||data.example||w.example,
+        }:w));
+      } catch(e){ console.warn("자동완성 실패:", v.word, e); }
+      // API 과부하 방지
+      await new Promise(r=>setTimeout(r,300));
+    }
+    setBulkFilling(false);
+    alert(`✅ 자동완성 완료!`);
+  };
+  const masteredCount=vocab.filter(v=>v.mastered).length;
+  const unmasteredVocab=vocab.filter(v=>!v.mastered);
+  const reviewVocab=shuffled||(smartMode&&unmasteredVocab.length>0?unmasteredVocab:vocab);
+  const card=reviewVocab[ci]||{};
+
+  // 스크롤
+
+  // ── AI: 발음 자동 채우기 ──
+  const autoFill = async () => {
+    if(!nWord.trim()){return;}
+    setAutoFilling(true);
+    try {
+      const sys = lc==="en"
+        ? `You are a pronunciation assistant. Given an English word, respond ONLY with JSON: {"phonetic":"IPA notation","korean_pronunciation":"Korean phonetic reading","meaning":"Korean meaning","example":"simple English example sentence"}`
+        : `You are a Chinese language assistant. Given a Chinese word/phrase, respond ONLY with JSON: {"phonetic":"pinyin with tones","meaning":"Korean meaning","example":"simple Chinese example sentence"}`;
+      const raw = await askClaude(apiKey, sys, nWord.trim());
+      const clean = raw.replace(/```json|```/g,"").trim();
+      const data = JSON.parse(clean);
+      if(data.phonetic) setNPhon(data.phonetic);
+      if(data.korean_pronunciation) setNKorPron(data.korean_pronunciation);
+      if(data.meaning && !nMean) setNMean(data.meaning);
+      if(data.example && !nEx) setNEx(data.example);
+    } catch(e){ alert("AI 조회 실패: "+e.message); }
+    setAutoFilling(false);
+  };
+
+  const addOrUpdateVocab=()=>{
+    if(!nWord.trim())return;
+    const entry={id:editIdx!==null?vocab[editIdx].id:newId(),word:nWord,meaning:nMean,example:nEx,phonetic:nPhon,korean_pronunciation:nKorPron,date:new Date().toISOString().slice(0,10),reviewCount:editIdx!==null?(vocab[editIdx].reviewCount||0):0,mastered:editIdx!==null?vocab[editIdx].mastered:false};
+    if(editIdx!==null){setVocab(p=>p.map((v,i)=>i===editIdx?entry:v));setEditIdx(null);}
+    else setVocab(p=>[entry,...p]);
+    setNWord("");setNMean("");setNEx("");setNPhon("");setNKorPron("");
+  };
+
+  const startEdit=(v,i)=>{
+    setNWord(v.word);setNMean(v.meaning);setNEx(v.example||"");setNPhon(v.phonetic||"");setNKorPron(v.korean_pronunciation||"");
+    setEditIdx(i);setTab(0);window.scrollTo({top:0,behavior:"smooth"});
+  };
+
+  const toggleMastered=(idx)=>setVocab(p=>p.map((v,i)=>i===idx?{...v,mastered:!v.mastered}:v));
+  const recordReview=(wordId)=>setVocab(p=>p.map(v=>v.id===wordId?{...v,reviewCount:(v.reviewCount||0)+1}:v));
+
+  const startReview=()=>{
+    const pool=smartMode&&unmasteredVocab.length>0?unmasteredVocab:vocab;
+    setShuffled([...pool].sort(()=>Math.random()-0.5));
+    setCi(0);setFlipped(false);setScore({ok:0,no:0});setWritingMode(false);setWritingText("");setWritingFeedback("");
+  };
+
+  // ── AI: 작문 피드백 ──
+  const getWritingFeedback = async () => {
+    if(!writingText.trim())return;
+    setFeedbackLoading(true);setWritingFeedback("");
+    try {
+      const lang = lc==="en"?"English":"Chinese";
+      const sys = `You are a ${lang} language teacher. The student is Korean. Evaluate their sentence briefly in Korean. Format: 
+✅ 자연스러움 여부 (한 줄)
+💡 개선점 (있으면 한 줄, 없으면 "완벽해요!")
+📝 더 자연스러운 표현 (있으면)
+
+Keep it short and encouraging.`;
+      const res = await askClaude(apiKey, sys, `단어: "${card.word}"\n학생 작문: "${writingText}"`);
+      setWritingFeedback(res);
+    } catch(e){setWritingFeedback("피드백 실패: "+e.message);}
+    setFeedbackLoading(false);
+  };
+
+  // ── AI: 다이얼로그 생성 ──
+  const generateDialogue = async () => {
+    setDialogueLoading(true); setDialogue(null);
+    try {
+      const words = unmasteredVocab.slice(0,6).map(v=>v.word).join(", ");
+      const allWords = vocab.slice(0,10).map(v=>v.word).join(", ");
+      const targetWords = words || allWords;
+      const lang = lc==="en"?"English":"Chinese";
+      const sys = `You are creating a natural dialogue for Korean language learners studying ${lang}. 
+Respond ONLY with JSON in this format:
+{
+  "title": "대화 제목 (Korean)",
+  "context": "상황 설명 (Korean, 1 sentence)",
+  "lines": [
+    {"speaker":"Alex","text":"...","korean":"Korean translation"},
+    {"speaker":"Sam","text":"...","korean":"Korean translation"}
+  ],
+  "usedWords": ["word1","word2"]
+}
+Make a natural 8-10 line dialogue between two native speakers (Alex and Sam) that naturally uses these words: ${targetWords}
+Keep it conversational and realistic.`;
+      const raw = await askClaude(apiKey, sys, `Create a dialogue using: ${targetWords}`);
+      const clean = raw.replace(/```json|```/g,"").trim();
+      setDialogue(JSON.parse(clean));
+    } catch(e){setDialogue({error:"생성 실패: "+e.message});}
+    setDialogueLoading(false);
+  };
+
+  const PronBlock=()=>card.phonetic?(
+    <div style={{marginBottom:8,textAlign:"center"}}>
+      <div style={{fontSize:14,color:t.mu,fontFamily:"monospace"}}>{card.phonetic}</div>
+      {card.korean_pronunciation&&<div style={{fontSize:13,color:t.ac,opacity:0.8}}>{card.korean_pronunciation}</div>}
+    </div>
+  ):null;
+
+  const filteredVocab=vocab.filter(v=>{
+    const ms=!search||v.word?.toLowerCase().includes(search.toLowerCase())||v.meaning?.includes(search);
+    const mf=filterMode==="all"||!v.mastered;
+    return ms&&mf;
+  });
+
+  return (
+    <div style={{minHeight:"100vh",background:t.bg,color:t.tx}}>
+      {youglishWord&&<YouGlishModal word={youglishWord} lang={lg.youglishLang} onClose={()=>setYouglishWord(null)} />}
+
+      {/* Header */}
+      <div style={{padding:"12px 16px 0",borderBottom:`1px solid ${t.bd}`,position:"sticky",top:0,background:t.bg,zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:18,fontWeight:700,color:t.ac}}>LinguaNote</span>
+            <span style={{fontSize:16}}>{lg.flag}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:11,color:t.muD}}>✅{masteredCount}/{vocab.length}</span>
+            <button onClick={onBack} style={{padding:"4px 10px",borderRadius:20,border:`1px solid ${t.bd}`,background:"transparent",color:t.mu,cursor:"pointer",fontSize:11}}>← 변경</button>
+          </div>
+        </div>
+        {/* 탭 - 스크롤 가능 */}
+        <div style={{display:"flex",overflowX:"auto",scrollbarWidth:"none",WebkitOverflowScrolling:"touch"}}>
+          {TABS.map((tb,i)=>(
+            <button key={i} onClick={()=>setTab(i)} style={{flex:"0 0 auto",padding:"8px 12px",border:"none",background:tab===i?t.acBg:"transparent",color:tab===i?t.ac:t.mu,borderBottom:tab===i?`2px solid ${t.ac}`:"2px solid transparent",cursor:"pointer",fontSize:12,fontFamily:"inherit",whiteSpace:"nowrap",transition:"all 0.2s"}}>{tb}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{padding:"16px",maxWidth:680,margin:"0 auto"}}>
+
+        {/* ── TAB 0: 단어장 ── */}
+        {tab===0&&(
+          <div>
+            <div style={{background:t.card,borderRadius:12,padding:16,border:`1px solid ${t.bdD}`,marginBottom:16}}>
+              <h3 style={{margin:"0 0 12px",fontSize:11,color:t.ac,letterSpacing:2,textTransform:"uppercase"}}>{editIdx!==null?"✏️ 단어 수정":"단어/표현 추가"}</h3>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input value={nWord} onChange={e=>setNWord(e.target.value)} placeholder={lc==="en"?"영어 단어...":"중국어 단어..."} style={{...S({flex:1,width:"auto"})}} />
+                <button onClick={autoFill} disabled={autoFilling||!nWord.trim()} style={{padding:"10px 14px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:12,whiteSpace:"nowrap",opacity:!nWord.trim()?0.4:1}}>
+                  {autoFilling?<Spinner color={t.ac}/>:"🤖 자동입력"}
+                </button>
+              </div>
+              <input value={nPhon} onChange={e=>setNPhon(e.target.value)} placeholder={lc==="en"?"발음기호 (예: /rɪˈzɪliəns/)":"병음 (예: yuánfèn)"} style={{...S(),marginBottom:8}} />
+              {lc==="en"&&<input value={nKorPron} onChange={e=>setNKorPron(e.target.value)} placeholder="한글 발음 (예: 리질리언스)" style={{...S(),marginBottom:8}} />}
+              <input value={nMean} onChange={e=>setNMean(e.target.value)} placeholder="뜻 (한국어)..." style={{...S(),marginBottom:8}} />
+              <input value={nEx} onChange={e=>setNEx(e.target.value)} placeholder="예문..." onKeyDown={e=>e.key==="Enter"&&addOrUpdateVocab()} style={{...S(),marginBottom:12}} />
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={addOrUpdateVocab} style={{flex:1,padding:"10px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:14,fontWeight:600}}>{editIdx!==null?"✅ 수정 완료":"+ 추가"}</button>
+                {editIdx!==null&&<button onClick={()=>{setEditIdx(null);setNWord("");setNMean("");setNEx("");setNPhon("");setNKorPron("");}} style={{padding:"10px 16px",borderRadius:8,background:"transparent",border:`1px solid ${t.bd}`,color:t.muD,cursor:"pointer",fontSize:13}}>취소</button>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,marginBottom:12}}>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 검색..." style={{...S({flex:1,width:"auto"})}} />
+              <button onClick={()=>setFilterMode(f=>f==="all"?"unmastered":"all")} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${filterMode==="unmastered"?t.acBd:"rgba(255,255,255,0.1)"}`,background:filterMode==="unmastered"?t.acBg:"transparent",color:filterMode==="unmastered"?t.ac:t.muD,cursor:"pointer",fontSize:12,whiteSpace:"nowrap"}}>
+                {filterMode==="unmastered"?"미숙지만":"전체"}
+              </button>
+              <button onClick={()=>setShowImport(s=>!s)} style={{padding:"8px 12px",borderRadius:8,border:`1px solid ${t.acBd}`,background:showImport?t.acBg:"transparent",color:t.ac,cursor:"pointer",fontSize:12,whiteSpace:"nowrap"}}>📥 가져오기</button>
+              <button onClick={bulkAutoFill} disabled={bulkFilling} style={{padding:"8px 12px",borderRadius:8,border:`1px solid rgba(255,200,100,0.3)`,background:"transparent",color:"#e8c87a",cursor:"pointer",fontSize:12,whiteSpace:"nowrap",opacity:bulkFilling?0.6:1}}>
+                {bulkFilling?`🤖 ${bulkProgress.current}/${bulkProgress.total}...`:"🤖 발음 일괄완성"}
+              </button>
+            </div>
+
+            {/* 가져오기 패널 */}
+            {showImport&&(
+              <div className="fade-in" style={{background:t.card,borderRadius:12,padding:16,border:`1px solid ${t.acBd}`,marginBottom:16}}>
+                <h3 style={{margin:"0 0 8px",fontSize:12,color:t.ac,letterSpacing:1}}>📥 에버노트에서 가져오기</h3>
+                <p style={{margin:"0 0 10px",fontSize:12,color:t.muD}}>에버노트 내용을 그대로 복사해서 붙여넣으세요. AI가 단어를 자동으로 골라낼게요.</p>
+                <textarea
+                  value={importText} onChange={e=>setImportText(e.target.value)}
+                  placeholder={"예시:\nserendipity - 뜻밖의 행운\nephemeral 덧없는\nresilience: 회복력\n...\n\n어떤 형식이든 OK!"}
+                  style={{width:"100%",minHeight:140,background:"rgba(255,255,255,0.04)",border:`1px solid ${t.bd}`,borderRadius:8,color:t.tx,padding:10,fontSize:13,fontFamily:"inherit",resize:"vertical",boxSizing:"border-box"}}
+                />
+                <button onClick={runImport} disabled={importLoading||!importText.trim()} style={{width:"100%",marginTop:10,padding:"10px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:14,fontWeight:600,opacity:!importText.trim()?0.4:1}}>
+                  {importLoading?<>⏳ AI가 단어 추출 중...</>:"🤖 AI로 단어 추출하기"}
+                </button>
+
+                {/* 결과 미리보기 */}
+                {importResult&&!importResult.error&&(
+                  <div className="fade-in" style={{marginTop:14}}>
+                    <div style={{fontSize:12,color:t.muD,marginBottom:8}}>총 <span style={{color:t.ac,fontWeight:700}}>{importResult.length}개</span> 단어가 추출됐어요. 확인 후 추가하세요.</div>
+                    <div style={{maxHeight:200,overflowY:"auto",border:`1px solid ${t.bd}`,borderRadius:8,padding:8}}>
+                      {importResult.map((item,i)=>(
+                        <div key={i} style={{padding:"5px 0",borderBottom:`1px solid ${t.bd}`,fontSize:13,display:"flex",gap:8}}>
+                          <span style={{fontWeight:600,minWidth:100}}>{item.word}</span>
+                          <span style={{color:t.muD}}>{item.meaning}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:8,marginTop:10}}>
+                      <button onClick={confirmImport} style={{flex:1,padding:"10px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:13,fontWeight:600}}>✅ {importResult.length}개 모두 추가</button>
+                      <button onClick={()=>{setImportResult(null);setImportText("");}} style={{padding:"10px 14px",borderRadius:8,border:`1px solid ${t.bd}`,background:"transparent",color:t.muD,cursor:"pointer",fontSize:13}}>다시</button>
+                    </div>
+                  </div>
+                )}
+                {importResult?.error&&<div style={{marginTop:10,color:"#e88a8a",fontSize:13}}>⚠️ {importResult.error}</div>}
+              </div>
+            )}
+            {filteredVocab.length===0?(
+              <div style={{textAlign:"center",padding:"40px 20px",color:t.muD}}><div style={{fontSize:40,marginBottom:12}}>📝</div><p>단어를 추가해보세요</p></div>
+            ):filteredVocab.map(v=>{
+              const i=vocab.findIndex(w=>w.id===v.id);
+              return (
+                <div key={v.id} className="fade-in" style={{padding:14,background:v.mastered?"rgba(80,180,80,0.04)":t.card,borderRadius:10,marginBottom:10,border:`1px solid ${v.mastered?"rgba(80,180,80,0.2)":t.bdD}`,opacity:v.mastered?0.7:1,transition:"all 0.2s"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                        <span style={{fontWeight:700,fontSize:17}}>{v.word}</span>
+                        <button onClick={()=>toggleMastered(i)} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:20,border:`1px solid ${v.mastered?"rgba(80,200,80,0.5)":"rgba(255,255,255,0.1)"}`,background:v.mastered?"rgba(80,200,80,0.1)":"transparent",cursor:"pointer",fontSize:11,color:v.mastered?"#8ae88a":"#555"}}>
+                          {v.mastered?"✅ 숙지":"○ 미숙지"}{v.reviewCount>0&&<span style={{color:"#666"}}>·{v.reviewCount}회</span>}
+                        </button>
+                      </div>
+                      {v.phonetic&&<div style={{fontSize:12,color:t.mu,fontFamily:"monospace",marginBottom:3}}>{v.phonetic}{v.korean_pronunciation&&<span style={{fontFamily:"inherit",color:t.ac,opacity:0.7,marginLeft:8}}>{v.korean_pronunciation}</span>}</div>}
+                      <div style={{color:t.mu,fontSize:14,marginBottom:v.example?4:0}}>🇰🇷 {v.meaning}</div>
+                      {v.example&&<div style={{color:t.muD,fontSize:12,fontStyle:"italic"}}>{v.example}</div>}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6,marginLeft:10,flexShrink:0}}>
+                      {lc==="en"&&<button onClick={()=>window.open(`https://youglish.com/pronounce/${encodeURIComponent(v.word)}/english`,"_blank")} style={{padding:"4px 8px",borderRadius:6,border:`1px solid ${t.acBd.replace("0.4","0.3")}`,background:"transparent",color:t.ac,cursor:"pointer",fontSize:11}}>▶ 영상</button>}
+                      <button onClick={()=>startEdit(v,i)} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(255,255,255,0.12)",background:"transparent",color:t.mu,cursor:"pointer",fontSize:11}}>수정</button>
+                      <button onClick={()=>{if(confirm("삭제할까요?"))setVocab(p=>p.filter(w=>w.id!==v.id));}} style={{padding:"4px 8px",borderRadius:6,border:"1px solid rgba(200,80,80,0.3)",background:"transparent",color:"#e88a8a",cursor:"pointer",fontSize:11}}>삭제</button>
+                    </div>
+                  </div>
+                  <div style={{marginTop:6,fontSize:10,color:t.muD}}>{v.date}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── TAB 1: 복습 ── */}
+        {tab===1&&(
+          <div>
+            <div style={{textAlign:"center",marginBottom:20}}>
+              <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:12,flexWrap:"wrap"}}>
+                {["word","meaning"].map(m=>(
+                  <button key={m} onClick={()=>{setRMode(m);setFlipped(false);setCi(0);setShuffled(null);setWritingMode(false);setWritingText("");setWritingFeedback("");}} style={{padding:"7px 16px",borderRadius:20,border:rMode===m?`1px solid ${t.ac}`:`1px solid rgba(255,255,255,0.1)`,background:rMode===m?t.acBg:"transparent",color:rMode===m?t.ac:t.mu,cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>{m==="word"?"단어 → 뜻":"뜻 → 단어"}</button>
+                ))}
+                <button onClick={()=>{setSmartMode(s=>!s);setShuffled(null);setCi(0);setFlipped(false);setScore({ok:0,no:0});setWritingMode(false);}} style={{padding:"7px 16px",borderRadius:20,border:smartMode?`1px solid ${t.ac}`:`1px solid rgba(255,255,255,0.1)`,background:smartMode?t.acBg:"transparent",color:smartMode?t.ac:t.mu,cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>{smartMode?"🎯 미숙지":"📚 전체"}</button>
+              </div>
+              {vocab.length>0&&<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:12}}>
+                <span style={{color:t.muD,fontSize:13}}>{ci+1}/{reviewVocab.length} · ✅{score.ok} · ❌{score.no}</span>
+                <button onClick={startReview} style={{padding:"4px 12px",borderRadius:20,border:"1px solid rgba(255,255,255,0.1)",background:"transparent",color:t.mu,cursor:"pointer",fontSize:11}}>🔀 섞기</button>
+              </div>}
+            </div>
+
+            {vocab.length>0?(
+              <>
+                <div onClick={()=>{if(!writingMode){setFlipped(!flipped);}}} style={{minHeight:200,borderRadius:16,border:`1px solid ${t.acBd.replace("0.4","0.25")}`,background:flipped?t.acDim:t.card,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:writingMode?"default":"pointer",padding:28,textAlign:"center",transition:"background 0.25s",marginBottom:12,userSelect:"none"}}>
+                  {!flipped?(
+                    rMode==="word"?<>
+                      <div style={{fontSize:30,fontWeight:700,marginBottom:10}}>{card.word}</div>
+                      <PronBlock/>
+                      <div style={{color:t.muD,fontSize:12,marginTop:8}}>탭해서 뜻 확인 👆</div>
+                    </>:<>
+                      <div style={{fontSize:22,fontWeight:600,marginBottom:14,lineHeight:1.5}}>{card.meaning}</div>
+                      {card.example&&<div style={{padding:"8px 16px",background:"rgba(255,255,255,0.04)",borderRadius:8,fontSize:13,color:t.mu,fontStyle:"italic"}}>{card.example}</div>}
+                      <div style={{color:t.muD,fontSize:12,marginTop:12}}>탭해서 단어 확인 👆</div>
+                    </>
+                  ):(
+                    rMode==="word"?<>
+                      <div style={{fontSize:22,fontWeight:600,color:t.ac,marginBottom:8}}>{card.meaning}</div>
+                      {card.example&&<div style={{color:t.muD,fontSize:13,fontStyle:"italic"}}>{card.example}</div>}
+                    </>:<>
+                      <div style={{fontSize:28,fontWeight:700,color:t.ac,marginBottom:8}}>{card.word}</div>
+                      <PronBlock/>
+                    </>
+                  )}
+                </div>
+
+                {/* 버튼들 */}
+                {flipped&&!writingMode&&(
+                  <div style={{display:"flex",gap:8,justifyContent:"center",marginBottom:12,flexWrap:"wrap"}}>
+                    <button onClick={()=>{recordReview(card.id);setScore(s=>({...s,no:s.no+1}));setFlipped(false);setCi((ci+1)%reviewVocab.length);setWritingText("");setWritingFeedback("");}} style={{flex:1,maxWidth:140,padding:"12px",borderRadius:10,border:`1px solid ${t.no.b}`,background:t.no.bg,color:t.no.c,cursor:"pointer",fontSize:14,fontFamily:"inherit"}}>❌ 몰라요</button>
+                    {lc==="en"&&<button onClick={()=>window.open(`https://youglish.com/pronounce/${encodeURIComponent(card.word)}/english`,"_blank")} style={{padding:"12px 12px",borderRadius:10,border:`1px solid ${t.acBd.replace("0.4","0.3")}`,background:t.acBg,color:t.ac,cursor:"pointer",fontSize:12}}>▶ 영상</button>}
+                    <button onClick={()=>{setWritingMode(true);}} style={{padding:"12px 12px",borderRadius:10,border:"1px solid rgba(150,120,200,0.4)",background:"rgba(150,120,200,0.1)",color:"#c8a8e8",cursor:"pointer",fontSize:12}}>✍️ 작문</button>
+                    <button onClick={()=>{recordReview(card.id);setScore(s=>({...s,ok:s.ok+1}));setFlipped(false);setCi((ci+1)%reviewVocab.length);setWritingText("");setWritingFeedback("");}} style={{flex:1,maxWidth:140,padding:"12px",borderRadius:10,border:`1px solid ${t.ok.b}`,background:t.ok.bg,color:t.ok.c,cursor:"pointer",fontSize:14,fontFamily:"inherit"}}>✅ 알아요!</button>
+                  </div>
+                )}
+
+                {/* 작문 섹션 */}
+                {writingMode&&(
+                  <div className="fade-in" style={{background:t.card,borderRadius:12,padding:16,border:"1px solid rgba(150,120,200,0.3)",marginBottom:12}}>
+                    <div style={{fontSize:12,color:"#c8a8e8",marginBottom:8}}>✍️ "{card.word}" 을 사용해서 문장을 만들어보세요</div>
+                    <textarea value={writingText} onChange={e=>setWritingText(e.target.value)} placeholder={lc==="en"?"Write a sentence using this word...":"用这个词造一个句子..."} rows={3} style={{...S({resize:"none",marginBottom:8})}} />
+                    {writingFeedback&&(
+                      <div className="fade-in" style={{padding:"12px 14px",background:"rgba(150,120,200,0.08)",border:"1px solid rgba(150,120,200,0.25)",borderRadius:8,fontSize:13,lineHeight:1.8,color:t.tx,marginBottom:8,whiteSpace:"pre-wrap"}}>
+                        {writingFeedback}
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={getWritingFeedback} disabled={feedbackLoading||!writingText.trim()} style={{flex:1,padding:"9px",borderRadius:8,background:"rgba(150,120,200,0.15)",border:"1px solid rgba(150,120,200,0.4)",color:"#c8a8e8",cursor:"pointer",fontSize:13,opacity:!writingText.trim()?0.4:1}}>
+                        {feedbackLoading?<Spinner color="#c8a8e8"/>:"🤖 AI 피드백"}
+                      </button>
+                      <button onClick={()=>{setWritingMode(false);setWritingText("");setWritingFeedback("");}} style={{padding:"9px 14px",borderRadius:8,background:"transparent",border:`1px solid ${t.bd}`,color:t.muD,cursor:"pointer",fontSize:13}}>닫기</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 숙지 토글 */}
+                {flipped&&card.id&&(
+                  <div style={{textAlign:"center",marginBottom:12}}>
+                    <button onClick={()=>{const i=vocab.findIndex(v=>v.id===card.id);if(i>=0)toggleMastered(i);}} style={{padding:"6px 18px",borderRadius:20,border:`1px solid ${vocab.find(v=>v.id===card.id)?.mastered?"rgba(80,200,80,0.5)":"rgba(255,255,255,0.15)"}`,background:vocab.find(v=>v.id===card.id)?.mastered?"rgba(80,200,80,0.1)":"transparent",color:vocab.find(v=>v.id===card.id)?.mastered?"#8ae88a":"#666",cursor:"pointer",fontSize:12}}>
+                      {vocab.find(v=>v.id===card.id)?.mastered?"✅ 숙지 완료 (해제)":"○ 숙지 완료로 표시"}
+                    </button>
+                  </div>
+                )}
+
+                {score.ok+score.no===reviewVocab.length&&reviewVocab.length>0&&score.ok+score.no>0&&(
+                  <div style={{padding:"16px 20px",background:t.acDim,borderRadius:12,border:`1px solid ${t.acBd}`,textAlign:"center"}}>
+                    <div style={{fontSize:24,marginBottom:6}}>🎉</div>
+                    <div style={{color:t.ac,fontWeight:600,marginBottom:4}}>복습 완료!</div>
+                    <div style={{color:t.mu,fontSize:13}}>✅{score.ok}개 · ❌{score.no}개</div>
+                    <button onClick={startReview} style={{marginTop:12,padding:"8px 20px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:13}}>다시 복습</button>
+                  </div>
+                )}
+              </>
+            ):(
+              <div style={{textAlign:"center",padding:"50px 20px",color:t.muD}}><div style={{fontSize:44,marginBottom:12}}>📝</div><p>단어장에 단어를 추가해보세요</p></div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB 2: 다이얼로그 ── */}
+        {tab===2&&(
+          <div>
+            <div style={{background:t.card,borderRadius:12,padding:16,border:`1px solid ${t.bdD}`,marginBottom:16,textAlign:"center"}}>
+              <div style={{fontSize:13,color:t.mu,marginBottom:12,lineHeight:1.7}}>
+                미숙지 단어들로 원어민 2명이 대화하는<br/>자연스러운 다이얼로그를 AI가 생성해요
+              </div>
+              <div style={{fontSize:12,color:t.muD,marginBottom:14}}>
+                미숙지 단어 {unmasteredVocab.length}개 / 전체 {vocab.length}개
+              </div>
+              <button onClick={generateDialogue} disabled={dialogueLoading} style={{padding:"12px 32px",borderRadius:10,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:15,fontWeight:600,fontFamily:"inherit"}}>
+                {dialogueLoading?<><Spinner color={t.ac}/> <span style={{marginLeft:8}}>생성 중...</span></>:"✨ 다이얼로그 생성"}
+              </button>
+            </div>
+
+            {dialogue?.error&&(
+              <div style={{padding:14,background:"rgba(200,80,80,0.1)",border:"1px solid rgba(200,80,80,0.3)",borderRadius:10,color:"#e88a8a",fontSize:13}}>{dialogue.error}</div>
+            )}
+
+            {dialogue&&!dialogue.error&&(
+              <div className="fade-in">
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:18,fontWeight:700,color:t.ac,marginBottom:4}}>{dialogue.title}</div>
+                  <div style={{fontSize:13,color:t.muD,fontStyle:"italic"}}>{dialogue.context}</div>
+                  {dialogue.usedWords?.length>0&&(
+                    <div style={{marginTop:8,display:"flex",flexWrap:"wrap",gap:6}}>
+                      {dialogue.usedWords.map(w=>(
+                        <span key={w} style={{padding:"2px 10px",borderRadius:20,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,fontSize:11}}>{w}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {dialogue.lines?.map((line,i)=>{
+                  const isAlex=line.speaker==="Alex";
+                  return (
+                    <div key={i} className="fade-in" style={{display:"flex",gap:10,marginBottom:14,flexDirection:isAlex?"row":"row-reverse"}}>
+                      <div style={{width:36,height:36,borderRadius:"50%",background:isAlex?t.acBg:"rgba(150,120,200,0.2)",border:`1px solid ${isAlex?t.acBd:"rgba(150,120,200,0.4)"}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:isAlex?t.ac:"#c8a8e8",flexShrink:0,marginTop:4}}>
+                        {line.speaker[0]}
+                      </div>
+                      <div style={{maxWidth:"75%"}}>
+                        <div style={{fontSize:10,color:t.muD,marginBottom:3,textAlign:isAlex?"left":"right"}}>{line.speaker}</div>
+                        <div style={{padding:"10px 14px",borderRadius:12,background:isAlex?t.card:"rgba(150,120,200,0.08)",border:`1px solid ${isAlex?t.bdD:"rgba(150,120,200,0.2)"}`,fontSize:14,lineHeight:1.6}}>{line.text}</div>
+                        {line.korean&&<div style={{fontSize:11,color:t.muD,marginTop:4,paddingLeft:4,textAlign:isAlex?"left":"right"}}>{line.korean}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                <button onClick={generateDialogue} style={{width:"100%",marginTop:8,padding:"10px",borderRadius:10,background:"transparent",border:`1px solid ${t.bd}`,color:t.mu,cursor:"pointer",fontSize:13}}>🔄 새로 생성</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB 3: 메모 ── */}
+        {tab===3&&(
+          <div>
+            <div style={{background:t.card,borderRadius:12,padding:16,border:`1px solid ${t.bdD}`,marginBottom:16}}>
+              <h3 style={{margin:"0 0 10px",fontSize:11,color:t.ac,letterSpacing:2,textTransform:"uppercase"}}>{editNoteIdx!==null?"✏️ 메모 수정":"자유 메모"}</h3>
+              <textarea value={memo} onChange={e=>setMemo(e.target.value)} placeholder="오늘 배운 것, 느낀 것을 자유롭게..." rows={4} style={{...S({resize:"vertical"})}} />
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                <button onClick={()=>{
+                  if(!memo.trim())return;
+                  if(editNoteIdx!==null){setNotes(p=>p.map((n,i)=>i===editNoteIdx?{text:memo,date:new Date().toLocaleString("ko-KR")}:n));setEditNoteIdx(null);}
+                  else setNotes(p=>[{text:memo,date:new Date().toLocaleString("ko-KR")},...p]);
+                  setMemo("");
+                }} style={{flex:1,padding:"9px",borderRadius:8,background:t.acBg,border:`1px solid ${t.acBd}`,color:t.ac,cursor:"pointer",fontSize:13,fontWeight:600}}>
+                  {editNoteIdx!==null?"✅ 수정 완료":"메모 저장"}
+                </button>
+                {editNoteIdx!==null&&<button onClick={()=>{setEditNoteIdx(null);setMemo("");}} style={{padding:"9px 16px",borderRadius:8,background:"transparent",border:`1px solid ${t.bd}`,color:t.muD,cursor:"pointer",fontSize:13}}>취소</button>}
+              </div>
+            </div>
+            {notes.length===0?(
+              <div style={{textAlign:"center",padding:"40px 20px",color:t.muD}}><div style={{fontSize:40,marginBottom:12}}>📓</div><p>오늘 배운 것을 자유롭게 기록해보세요</p></div>
+            ):notes.map((n,i)=>(
+              <div key={i} style={{padding:"12px 14px",background:t.card,borderRadius:10,marginBottom:10,border:`1px solid ${t.bdD}`,borderLeft:`3px solid ${t.acBd}`}}>
+                <p style={{margin:"0 0 8px",lineHeight:1.7,fontSize:14,whiteSpace:"pre-wrap"}}>{n.text}</p>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontSize:11,color:t.muD}}>{n.date}</span>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={()=>{setMemo(n.text);setEditNoteIdx(i);window.scrollTo({top:0,behavior:"smooth"});}} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${t.acBd.replace("0.4","0.3")}`,background:"transparent",color:t.ac,cursor:"pointer",fontSize:11}}>수정</button>
+                    <button onClick={()=>{if(confirm("삭제할까요?"))setNotes(p=>p.filter((_,idx)=>idx!==i));}} style={{padding:"3px 10px",borderRadius:6,border:"1px solid rgba(200,80,80,0.3)",background:"transparent",color:"#e88a8a",cursor:"pointer",fontSize:11}}>삭제</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Root App ──
+function App() {
+  const [lang,setLang]=useState(()=>LS("ln_lang",null));
+  const [apiKey,setApiKey]=useState(()=>LS("ln_apikey",""));
+  const setLangAndSave=lc=>{SS("ln_lang",lc);setLang(lc);};
+  const goBack=()=>{SS("ln_lang",null);setLang(null);};
+  const saveKey=k=>{SS("ln_apikey",k);setApiKey(k);};
+  const resetKey=()=>{SS("ln_apikey","");setApiKey("");};
+
+  if(!apiKey) return <ApiSetup onSave={saveKey}/>;
+  if(!lang) return <LangSelect onSelect={setLangAndSave}/>;
+  return <LangApp lc={lang} apiKey={apiKey} onBack={goBack} onResetKey={resetKey}/>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
